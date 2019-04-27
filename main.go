@@ -12,12 +12,36 @@ import (
 )
 
 // go run main.go | dot -Tsvg  >| test.svg
-// go run main.go | dot -Tsvg  >| $(date +"%a%d%b%Y_%H.%M.%S").svg
+// go run main.go | dot -Tsvg  >| generated/$(date +"%a%d%b%Y_%H.%M.%S").svg
 
+func addErrorNode(parentNode *dot.Node, content string, label string) {
+	errorNode := g.Node(content).
+		Attr("style", "filled").
+		Attr("fillcolor", "red")
+
+	style := "dashed"
+
+	g.Edge(
+		parentNode,
+		errorNode,
+		label,
+	).
+		Attr("arrowhead", "vee").
+		Attr("arrowtail", "inv").
+		Attr("arrowsize", ".7").
+		//
+		Attr("fontname", "bold").
+		Attr("fontsize", "7.0").
+		Attr("style", style).
+		Attr("fontcolor", "red")
+}
 func main() {
 
-	//wantedDomain := "adblock-data.brave.com"
-	wantedDomain := "mail.google.com"
+	wantedDomain := "adblock-data.brave.com"
+	//wantedDomain := "mail.google.com"
+	//wantedDomain := "example.com"
+	//wantedDomain := "ledger.brave.com"
+	//wantedDomain := "ticonsultores.biz.ni"
 	queryType := dns.TypeA
 
 	root := getRandomRootDNS()
@@ -50,30 +74,82 @@ func main() {
 			debug("1:", authority, wantedDomain, queryType)
 			res, err = Send(authority, wantedDomain, queryType)
 			if err != nil {
-				panic(err)
-			}
-			// given that we expect this call to get a non-authoritative answer,
-			// let's extract the RR contained in the authority section:
-			ns := getNS(res.Ns)
+				if isErrNoSuchHost(err) {
+					debug(authority, ": no such host")
+					//addErrorNode(parentNode, authority, "no such host")
+					noSuchHostNode := g.Node(authority).
+						Attr("style", "filled").
+						Attr("fillcolor", "red")
 
-			// let's randomly choose the NS (from the authority list) for the next
-			// query:
-			authority = chooseRandomNS(ns).Ns
+					style := "dashed"
 
-			// link all NS to parent:
-			for _, auth := range ns {
-				authorityNode = g.Node(auth.Ns)
-
-				style := "dashed"
-				//let's make it bold if the NS is gonna be used for the
-				// next query:
-				if auth.Ns == authority {
-					style = "bold"
+					g.Edge(
+						parentNode,
+						noSuchHostNode,
+						"no such host",
+					).
+						Attr("arrowhead", "vee").
+						Attr("arrowtail", "inv").
+						Attr("arrowsize", ".7").
+						//
+						Attr("fontname", "bold").
+						Attr("fontsize", "7.0").
+						Attr("style", style).
+						Attr("fontcolor", "red")
+					break
+				} else {
+					panic(err)
 				}
+			}
+
+			debug(res.Authoritative, len(res.Ns) > 0)
+			if len(res.Ns) > 0 {
+				// given that we expect this call to get a non-authoritative answer,
+				// let's extract the RR contained in the authority section:
+				ns := getNS(res.Ns)
+
+				// let's randomly choose the NS (from the authority list) for the next
+				// query:
+				randomNS := chooseRandomNS(ns)
+				authority = randomNS.Ns
+
+				// link all NS to parent:
+				for _, auth := range ns {
+					authorityNode = g.Node(auth.Ns)
+
+					style := "dashed"
+					//let's make it bold if the NS is gonna be used for the
+					// next query:
+					if auth.Ns == authority {
+						style = "bold"
+					}
+					g.Edge(
+						parentNode,
+						authorityNode,
+						rcodeLabel(wantedDomain, res.MsgHdr.Rcode),
+					).
+						Attr("arrowhead", "vee").
+						Attr("arrowtail", "inv").
+						Attr("arrowsize", ".7").
+						//
+						Attr("fontname", "bold").
+						Attr("fontsize", "7.0").
+						Attr("style", style).
+						Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+				}
+			}
+
+			noSuggestedNextAuthorities := len(res.Ns) == 0
+			if !res.Authoritative && noSuggestedNextAuthorities {
+				debug(authority, "is not authoritative, but does not suggest who could be")
+				deadEndNode := g.Node("???").
+					Attr("style", "filled").
+					Attr("fillcolor", "red")
+
 				g.Edge(
 					parentNode,
-					authorityNode,
-					rcodeLabel(wantedDomain, res.MsgHdr.Rcode),
+					deadEndNode,
+					authority+"is not authoritative, but does not suggest who could be",
 				).
 					Attr("arrowhead", "vee").
 					Attr("arrowtail", "inv").
@@ -81,22 +157,16 @@ func main() {
 					//
 					Attr("fontname", "bold").
 					Attr("fontsize", "7.0").
-					Attr("style", style).
-					Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+					Attr("fontcolor", "red")
+				break
 			}
 
-			// let's send the query, and basically discard the response if it is nont authoritative
-			// (`res` will be overwritten the the Send:1 in the next iteration of the loop):
-			debug("2:", authority, wantedDomain, queryType)
-			res, err = Send(authority, wantedDomain, queryType)
-			if err != nil {
-				panic(err)
-			}
 			parentNode = g.Node(authority)
 			if !res.Authoritative {
-				//fmt.Println(authority, "is not authoritative")
+				debug(authority, "is not authoritative")
 				continue
 			} else {
+				debug(authority, "is authoritative")
 				parentNode.
 					Attr("style", "filled").
 					Attr("fillcolor", "#0099ff")
@@ -126,11 +196,11 @@ func main() {
 								answerElem.AAAA,
 							)
 						}
-						//TODO: add other types of RR
 					}
 
 				}
-				resultNode := g.Node(content).Attr("style", "filled")
+				resultNode := g.Node(content).
+					Attr("style", "filled")
 				g.Edge(
 					parentNode,
 					resultNode,
@@ -146,6 +216,7 @@ func main() {
 					Attr("style", "bold").
 					Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
 				if cname, ok := hasCNAME(res.Answer); ok {
+					debug("cname:", cname.Target)
 					wantedDomain = cname.Target
 					authority = root
 					parentNode = resultNode
@@ -158,40 +229,10 @@ func main() {
 
 	//debug(g.String())
 	fmt.Println(g.String())
+}
 
-	return
-	di := dot.NewGraph(dot.Directed)
-	outside := di.Node("Outside")
-
-	// A
-	clusterA := di.Subgraph("Cluster A", dot.ClusterOption{})
-	insideOne := clusterA.Node("one")
-	insideTwo := clusterA.Node("two")
-
-	// B
-	clusterB := di.Subgraph("Cluster B", dot.ClusterOption{})
-	insideThree := clusterB.Node("three")
-	insideFour := clusterB.Node("four")
-
-	// edges
-	outside.
-		Edge(insideFour).
-		Edge(insideOne).
-		Edge(insideTwo).
-		Edge(insideThree).
-		Edge(outside)
-
-	fmt.Println(di.String())
-	return
-
-	g = dot.NewGraph(dot.Directed)
-	n1 := g.Node("coding")
-	n2 := g.Node("testing a little").Box()
-
-	g.Edge(n1, n2)
-	g.Edge(n2, n1, "back", "forth", "whatever").Attr("color", "red")
-
-	fmt.Println(g.String())
+func isErrNoSuchHost(e error) bool {
+	return strings.Contains(e.Error(), "no such host")
 }
 
 func stripFinalDot(s string) string {
@@ -246,6 +287,9 @@ func getNS(nsRR []dns.RR) []*dns.NS {
 	return ns
 }
 func chooseRandomNS(ns []*dns.NS) *dns.NS {
+	if len(ns) == 0 {
+		return nil
+	}
 	return ns[randomInt(0, len(ns)-1)]
 }
 
