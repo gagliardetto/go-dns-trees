@@ -52,14 +52,21 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
+			// given that we expect this call to get a non-authoritative answer,
+			// let's extract the RR contained in the authority section:
 			ns := getNS(res.Ns)
+
+			// let's randomly choose the NS (from the authority list) for the next
+			// query:
 			authority = chooseRandomNS(ns).Ns
 
-			// add all possible nodes, and link them to parent node:
+			// link all NS to parent:
 			for _, auth := range ns {
 				authorityNode = g.Node(auth.Ns)
 
 				style := "dashed"
+				//let's make it bold if the NS is gonna be used for the
+				// next query:
 				if auth.Ns == authority {
 					style = "bold"
 				}
@@ -78,12 +85,14 @@ func main() {
 					Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
 			}
 
-			parentNode = g.Node(authority)
+			// let's send the query, and basically discard the response if it is nont authoritative
+			// (`res` will be overwritten the the Send:1 in the next iteration of the loop):
 			debug("2:", authority, wantedDomain, queryType)
 			res, err = Send(authority, wantedDomain, queryType)
 			if err != nil {
 				panic(err)
 			}
+			parentNode = g.Node(authority)
 			if !res.Authoritative {
 				//fmt.Println(authority, "is not authoritative")
 				continue
@@ -147,7 +156,7 @@ func main() {
 		}
 	}
 
-	debug(g.String())
+	//debug(g.String())
 	fmt.Println(g.String())
 
 	return
