@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/emicklei/dot"
 	"github.com/miekg/dns"
 )
@@ -14,26 +15,8 @@ import (
 // go run main.go | dot -Tsvg  >| test.svg
 // go run main.go | dot -Tsvg  >| generated/$(date +"%a%d%b%Y_%H.%M.%S").svg
 
-func addErrorNode(parentNode *dot.Node, content string, label string) {
-	errorNode := g.Node(content).
-		Attr("style", "filled").
-		Attr("fillcolor", "red")
+func goExplore(g *dot.Graph, parentNode dot.Node, authority string) {
 
-	style := "dashed"
-
-	g.Edge(
-		parentNode,
-		errorNode,
-		label,
-	).
-		Attr("arrowhead", "vee").
-		Attr("arrowtail", "inv").
-		Attr("arrowsize", ".7").
-		//
-		Attr("fontname", "bold").
-		Attr("fontsize", "7.0").
-		Attr("style", style).
-		Attr("fontcolor", "red")
 }
 func main() {
 
@@ -61,10 +44,7 @@ func main() {
 		Attr("fontcolor", "white")
 
 	{
-		var res *dns.Msg
-		var err error
 		var authority string
-		var authorityNode dot.Node
 		var parentNode dot.Node
 
 		authority = root
@@ -72,30 +52,11 @@ func main() {
 
 		for {
 			debug("1:", authority, wantedDomain, queryType)
-			res, err = Send(authority, wantedDomain, queryType)
+			res, err := Send(authority, wantedDomain, queryType)
 			if err != nil {
 				if isErrNoSuchHost(err) {
 					debug(authority, ": no such host")
-					//addErrorNode(parentNode, authority, "no such host")
-					noSuchHostNode := g.Node(authority).
-						Attr("style", "filled").
-						Attr("fillcolor", "red")
-
-					style := "dashed"
-
-					g.Edge(
-						parentNode,
-						noSuchHostNode,
-						"no such host",
-					).
-						Attr("arrowhead", "vee").
-						Attr("arrowtail", "inv").
-						Attr("arrowsize", ".7").
-						//
-						Attr("fontname", "bold").
-						Attr("fontsize", "7.0").
-						Attr("style", style).
-						Attr("fontcolor", "red")
+					addErrorNode(g, parentNode, authority, "no such host")
 					break
 				} else {
 					panic(err)
@@ -115,7 +76,7 @@ func main() {
 
 				// link all NS to parent:
 				for _, auth := range ns {
-					authorityNode = g.Node(auth.Ns)
+					authorityNode := g.Node(auth.Ns)
 
 					style := "dashed"
 					//let's make it bold if the NS is gonna be used for the
@@ -142,22 +103,10 @@ func main() {
 			noSuggestedNextAuthorities := len(res.Ns) == 0
 			if !res.Authoritative && noSuggestedNextAuthorities {
 				debug(authority, "is not authoritative, but does not suggest who could be")
-				deadEndNode := g.Node("???").
-					Attr("style", "filled").
-					Attr("fillcolor", "red")
-
-				g.Edge(
-					parentNode,
-					deadEndNode,
-					authority+"is not authoritative, but does not suggest who could be",
-				).
-					Attr("arrowhead", "vee").
-					Attr("arrowtail", "inv").
-					Attr("arrowsize", ".7").
-					//
-					Attr("fontname", "bold").
-					Attr("fontsize", "7.0").
-					Attr("fontcolor", "red")
+				// dead end:
+				addErrorNode(g, parentNode, "DEAD END", authority+"is not authoritative, but does not suggest who could be")
+				debug(spew.Sdump(res.Answer))
+				// TODO: add eventual A or AAAA or CNAME records to the log (non-authoritative answers)
 				break
 			}
 
@@ -229,6 +178,28 @@ func main() {
 
 	//debug(g.String())
 	fmt.Println(g.String())
+}
+
+func addErrorNode(g *dot.Graph, parentNode dot.Node, content string, label string) {
+	errorNode := g.Node(content).
+		Attr("style", "filled").
+		Attr("fillcolor", "red")
+
+	style := "dashed"
+
+	g.Edge(
+		parentNode,
+		errorNode,
+		label,
+	).
+		Attr("arrowhead", "vee").
+		Attr("arrowtail", "inv").
+		Attr("arrowsize", ".7").
+		//
+		Attr("fontname", "bold").
+		Attr("fontsize", "7.0").
+		Attr("style", style).
+		Attr("fontcolor", "red")
 }
 
 func isErrNoSuchHost(e error) bool {
