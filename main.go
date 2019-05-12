@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/emicklei/dot"
 	"github.com/miekg/dns"
 	"gopkg.in/pipe.v2"
@@ -23,6 +22,8 @@ import (
 // go run main.go | dot -Tsvg  >| generated/$(date +"%a%d%b%Y_%H.%M.%S").svg
 
 var rootNS = getRandomRootDNS()
+
+var queryNum int
 
 func main() {
 	targets := []string{
@@ -50,6 +51,7 @@ func generateGraphFor(target string) error {
 		"starting graphing %q...",
 		target,
 	)
+	queryNum = 1
 
 	// create and initialize a new graph:
 	gph := dot.NewGraph(dot.Directed)
@@ -106,8 +108,9 @@ func generateGraphFor(target string) error {
 	}
 
 	debugf(
-		"finished %q",
+		"finished %q (saved to %s)\n\n",
 		target,
+		path,
 	)
 	return nil
 }
@@ -121,14 +124,14 @@ func init() {
 	mu = &sync.RWMutex{}
 }
 
-func Has(id string) bool {
+func AlreadyFollowed(id string) bool {
 	mu.RLock()
 	defer mu.RUnlock()
 	_, has := registry[id]
 	return has
 }
 
-func Add(id string) {
+func MarkAsFollowed(id string) {
 	mu.Lock()
 	defer mu.Unlock()
 	registry[id] = true
@@ -142,17 +145,18 @@ func goExplore(
 	queryType uint16,
 ) {
 	debugf(
-		"query: authority:%q, target:%q, queryType:%q\n",
+		"query#%v: authority:%q, target:%q",
+		queryNum,
 		authority,
 		target,
-		dns.TypeToString[queryType],
 	)
+	queryNum++
 
 	// send the query and get the response:
 	res, err := Send(authority, target, queryType)
 	if err != nil {
 		if isErrNoSuchHost(err) {
-			debugf("	%q: no such host\n", authority)
+			debugf("	%q: no such host", authority)
 			addErrorNode(g, parentNode, authority, "no such host")
 			return
 		} else {
@@ -162,7 +166,7 @@ func goExplore(
 
 	hasNextAuthority := len(res.Ns) > 0
 	debugf(
-		"	answer: isAuthoritative:%v, hasNextAuthority:%v\n",
+		"	 answer: isAuthoritative:%v, hasNextAuthority:%v",
 		res.Authoritative,
 		hasNextAuthority,
 	)
@@ -194,8 +198,8 @@ func goExplore(
 
 			id := fmt.Sprintf("%v:%v", auth.Ns, target)
 
-			if !Has(id) {
-				Add(id)
+			if !AlreadyFollowed(id) {
+				MarkAsFollowed(id)
 				goExplore(g, authorityNode, auth.Ns, target, queryType)
 			}
 		}
@@ -205,10 +209,10 @@ func goExplore(
 
 	noSuggestedNextAuthorities := hasNextAuthority == false
 	if !res.Authoritative && noSuggestedNextAuthorities {
-		debug(authority, "is not authoritative, but does not suggest who could be")
+		//debug("	 %sis not authoritative, but does not suggest who could be", authority)
 		// dead end:
 		addErrorNode(g, parentNode, "DEAD END", authority+"is not authoritative, but does not suggest who could be next")
-		debug(spew.Sdump(res.Answer))
+		//debug(spew.Sdump(res.Answer))
 		// TODO: show eventual A or AAAA or CNAME records (i.e. non-authoritative answers)
 		//return
 	}
@@ -334,7 +338,9 @@ func stripFinalDot(s string) string {
 }
 
 var (
-	dnsClient = new(dns.Client)
+	dnsClient = dns.Client{
+		DialTimeout: time.Second * 10,
+	}
 )
 
 func Send(server string, domain string, t uint16) (*dns.Msg, error) {
@@ -492,7 +498,7 @@ func debug(a ...interface{}) {
 }
 
 func debugf(format string, a ...interface{}) {
-	fmt.Fprintf(os.Stderr, format, a...)
+	fmt.Fprintln(os.Stderr, fmt.Sprintf(format, a...))
 }
 
 func rcodeLabel(domain string, rcode int) string {
