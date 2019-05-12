@@ -12,32 +12,48 @@ import (
 	"github.com/miekg/dns"
 )
 
+// cd $GOPATH/src/github.com/d1ss0lv3/trust-trees-go
 // go run main.go | dot -Tsvg  >| test.svg
 // go run main.go | dot -Tsvg  >| generated/$(date +"%a%d%b%Y_%H.%M.%S").svg
 
-func goExplore(g *dot.Graph, parentNode dot.Node, authority string) {
+var rootNS = getRandomRootDNS()
 
-}
 func main() {
+	targets := []string{
+		"adblock-data.brave.com",
+		"mail.google.com",
+		"example.com",
+		"ledger.brave.com",
+		"ticonsultores.biz.ni",
+	}
+	generateGraphsFor(targets[0])
+}
 
-	wantedDomain := "adblock-data.brave.com"
-	//wantedDomain := "mail.google.com"
-	//wantedDomain := "example.com"
-	//wantedDomain := "ledger.brave.com"
-	//wantedDomain := "ticonsultores.biz.ni"
+func generateGraphsFor(targets ...string) {
+	for _, target := range targets {
+		err := generateGraphFor(target)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+func generateGraphFor(target string) error {
+	// create and initialize a new graph:
+	gph := dot.NewGraph(dot.Directed)
+	gph.Attr("label", target+" DNS Trust Graph")
+	gph.Attr("labelloc", "t")
+	gph.Attr("pad", "3")
+	gph.Attr("nodesep", "1")
+	gph.Attr("ranksep", "5")
+	gph.Attr("fontsize", "50")
+	gph.Attr("concentrate", "true")
+
 	queryType := dns.TypeA
 
-	root := getRandomRootDNS()
-	g := dot.NewGraph(dot.Directed)
-	g.Attr("label", wantedDomain+" DNS Trust Graph")
-	g.Attr("labelloc", "t")
-	g.Attr("pad", "3")
-	g.Attr("nodesep", "1")
-	g.Attr("ranksep", "5")
-	g.Attr("fontsize", "50")
-	g.Attr("concentrate", "true")
-
-	zeroNode := g.Node(root)
+	// create the graphical zero node, i.e. the randomly-chosen root DNS that
+	// will be the first NS to be queried:
+	zeroNode := gph.Node(rootNS)
 	zeroNode.
 		Attr("fillcolor", "blue").
 		Attr("style", "filled").
@@ -47,137 +63,158 @@ func main() {
 		var authority string
 		var parentNode dot.Node
 
-		authority = root
+		authority = rootNS
 		parentNode = zeroNode
 
-		for {
-			debug("1:", authority, wantedDomain, queryType)
-			res, err := Send(authority, wantedDomain, queryType)
-			if err != nil {
-				if isErrNoSuchHost(err) {
-					debug(authority, ": no such host")
-					addErrorNode(g, parentNode, authority, "no such host")
-					break
-				} else {
-					panic(err)
-				}
-			}
+		goExplore(gph, parentNode, authority, target, queryType)
+	}
 
-			debug(res.Authoritative, len(res.Ns) > 0)
-			if len(res.Ns) > 0 {
-				// given that we expect this call to get a non-authoritative answer,
-				// let's extract the RR contained in the authority section:
-				ns := getNS(res.Ns)
+	// output dot graph:
+	fmt.Println(gph.String())
+	return nil
+}
 
-				// let's randomly choose the NS (from the authority list) for the next
-				// query:
-				randomNS := chooseRandomNS(ns)
-				authority = randomNS.Ns
-
-				// link all NS to parent:
-				for _, auth := range ns {
-					authorityNode := g.Node(auth.Ns)
-
-					style := "dashed"
-					//let's make it bold if the NS is gonna be used for the
-					// next query:
-					if auth.Ns == authority {
-						style = "bold"
-					}
-					g.Edge(
-						parentNode,
-						authorityNode,
-						rcodeLabel(wantedDomain, res.MsgHdr.Rcode),
-					).
-						Attr("arrowhead", "vee").
-						Attr("arrowtail", "inv").
-						Attr("arrowsize", ".7").
-						//
-						Attr("fontname", "bold").
-						Attr("fontsize", "7.0").
-						Attr("style", style).
-						Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
-				}
-			}
-
-			noSuggestedNextAuthorities := len(res.Ns) == 0
-			if !res.Authoritative && noSuggestedNextAuthorities {
-				debug(authority, "is not authoritative, but does not suggest who could be")
-				// dead end:
-				addErrorNode(g, parentNode, "DEAD END", authority+"is not authoritative, but does not suggest who could be")
-				debug(spew.Sdump(res.Answer))
-				// TODO: add eventual A or AAAA or CNAME records to the log (non-authoritative answers)
+func goExplore(
+	g *dot.Graph,
+	parentNode dot.Node,
+	authority string,
+	target string,
+	queryType uint16,
+) {
+	for {
+		debugf(
+			"query: authority:%q, target:%q, queryType:%q\n",
+			authority,
+			target,
+			dns.TypeToString[queryType],
+		)
+		res, err := Send(authority, target, queryType)
+		if err != nil {
+			if isErrNoSuchHost(err) {
+				debug(authority, ": no such host")
+				addErrorNode(g, parentNode, authority, "no such host")
 				break
-			}
-
-			parentNode = g.Node(authority)
-			if !res.Authoritative {
-				debug(authority, "is not authoritative")
-				continue
 			} else {
-				debug(authority, "is authoritative")
-				parentNode.
-					Attr("style", "filled").
-					Attr("fillcolor", "#0099ff")
+				panic(err)
+			}
+		}
 
-				var content string
+		hasNextAuthority := len(res.Ns) > 0
+		debugf(
+			"answer: isAuthoritative:%v, hasNextAuthority:%v\n",
+			res.Authoritative,
+			hasNextAuthority,
+		)
+		if hasNextAuthority {
+			// given that we expect this call to get a non-authoritative answer,
+			// let's extract the RR contained in the authority section:
+			nextAuthorities := extractAllNS(res.Ns)
 
-				for _, ans := range res.Answer {
-					switch answerElem := ans.(type) {
-					case *dns.A:
-						{
-							content += fmt.Sprintf(
-								"[A]%v\n",
-								answerElem.A,
-							)
-						}
-					case *dns.CNAME:
-						{
-							content += fmt.Sprintf(
-								"[CNAME]%v\n",
-								answerElem.Target,
-							)
-						}
-					case *dns.AAAA:
-						{
-							content += fmt.Sprintf(
-								"[AAAA]%v\n",
-								answerElem.AAAA,
-							)
-						}
-					}
+			// let's randomly choose the NS (from the authority list) for the next
+			// query:
+			randomNS := chooseRandomNS(nextAuthorities)
+			authority = randomNS.Ns
 
+			// link all NS to parent:
+			for _, auth := range nextAuthorities {
+				authorityNode := g.Node(auth.Ns)
+
+				style := "dashed"
+				//let's make it bold if the NS is gonna be used for the
+				// next query:
+				if auth.Ns == authority {
+					style = "bold"
 				}
-				resultNode := g.Node(content).
-					Attr("style", "filled")
 				g.Edge(
 					parentNode,
-					resultNode,
-					rcodeLabel(wantedDomain, res.MsgHdr.Rcode),
+					authorityNode,
+					rcodeLabel(target, res.MsgHdr.Rcode),
 				).
 					Attr("arrowhead", "vee").
 					Attr("arrowtail", "inv").
 					Attr("arrowsize", ".7").
-					Attr("color", "#0099ff").
 					//
 					Attr("fontname", "bold").
 					Attr("fontsize", "7.0").
-					Attr("style", "bold").
+					Attr("style", style).
 					Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
-				if cname, ok := hasCNAME(res.Answer); ok {
-					debug("cname:", cname.Target)
-					wantedDomain = cname.Target
-					authority = root
-					parentNode = resultNode
-				} else {
-					break
+			}
+		}
+
+		noSuggestedNextAuthorities := hasNextAuthority == false
+		if !res.Authoritative && noSuggestedNextAuthorities {
+			debug(authority, "is not authoritative, but does not suggest who could be")
+			// dead end:
+			addErrorNode(g, parentNode, "DEAD END", authority+"is not authoritative, but does not suggest who could be")
+			debug(spew.Sdump(res.Answer))
+			// TODO: show eventual A or AAAA or CNAME records (i.e. non-authoritative answers)
+			break
+		}
+
+		parentNode = g.Node(authority)
+		if !res.Authoritative {
+			debug(authority, "is not authoritative")
+			continue
+		} else {
+			debug(authority, "is authoritative")
+			parentNode.
+				Attr("style", "filled").
+				Attr("fillcolor", "#0099ff")
+
+			var content string
+
+			for _, ans := range res.Answer {
+				switch answerElem := ans.(type) {
+				case *dns.A:
+					{
+						content += fmt.Sprintf(
+							"[A]%v\n",
+							answerElem.A,
+						)
+					}
+				case *dns.CNAME:
+					{
+						content += fmt.Sprintf(
+							"[CNAME]%v\n",
+							answerElem.Target,
+						)
+					}
+				case *dns.AAAA:
+					{
+						content += fmt.Sprintf(
+							"[AAAA]%v\n",
+							answerElem.AAAA,
+						)
+					}
 				}
+
+			}
+			resultNode := g.Node(content).
+				Attr("style", "filled")
+			g.Edge(
+				parentNode,
+				resultNode,
+				rcodeLabel(target, res.MsgHdr.Rcode),
+			).
+				Attr("arrowhead", "vee").
+				Attr("arrowtail", "inv").
+				Attr("arrowsize", ".7").
+				Attr("color", "#0099ff").
+				//
+				Attr("fontname", "bold").
+				Attr("fontsize", "7.0").
+				Attr("style", "bold").
+				Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+			if cname, ok := hasCNAME(res.Answer); ok {
+				debug("cname:", cname.Target)
+				target = cname.Target
+				authority = rootNS
+				parentNode = resultNode
+			} else {
+				break
 			}
 		}
 	}
-
-	//debug(g.String())
-	fmt.Println(g.String())
 }
 
 func addErrorNode(g *dot.Graph, parentNode dot.Node, content string, label string) {
@@ -248,7 +285,7 @@ func getRandomRootDNS() string {
 	return rootServers[randomInt(0, len(rootServers)-1)].(*dns.NS).Ns
 }
 
-func getNS(nsRR []dns.RR) []*dns.NS {
+func extractAllNS(nsRR []dns.RR) []*dns.NS {
 	var ns []*dns.NS
 	for _, a := range nsRR {
 		if _, ok := a.(*dns.NS); ok {
@@ -301,6 +338,10 @@ var RcodeToColor = map[int]string{
 
 func debug(a ...interface{}) {
 	fmt.Fprintln(os.Stderr, a...)
+}
+
+func debugf(format string, a ...interface{}) {
+	fmt.Fprintf(os.Stderr, format, a...)
 }
 
 func rcodeLabel(domain string, rcode int) string {
