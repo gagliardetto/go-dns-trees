@@ -30,7 +30,7 @@ func main() {
 		"example.com",
 		"ledger.brave.com",
 	}
-	generateGraphsFor(targets[4])
+	generateGraphsFor(targets[0])
 }
 
 func generateGraphsFor(targets ...string) {
@@ -176,82 +176,96 @@ func goExplore(
 		addErrorNode(g, parentNode, "DEAD END", authority+"is not authoritative, but does not suggest who could be next")
 		debug(spew.Sdump(res.Answer))
 		// TODO: show eventual A or AAAA or CNAME records (i.e. non-authoritative answers)
-		return
+		//return
 	}
 
+	var authoritativeOrNot string
 	if res.Authoritative {
-		parentNode.
-			Attr("style", "filled").
-			Attr("fillcolor", "#0099ff")
+		authoritativeOrNot = "#0099ff"
+	} else {
+		authoritativeOrNot = "#FF8A00"
+	}
+	parentNode.
+		Attr("style", "filled").
+		Attr("fillcolor", authoritativeOrNot)
 
-		var content string
+	var content string
 
-		Arecords := extractA(res.Answer)
-		AAAArecords := extractAAAA(res.Answer)
-		CNAMErecords := extractCNAME(res.Answer)
+	Arecords := extractA(res.Answer)
+	AAAArecords := extractAAAA(res.Answer)
+	CNAMErecords := extractCNAME(res.Answer)
 
-		adder := func(label string, val interface{}) string {
-			return fmt.Sprintf(
-				"[%s]%v\n",
-				label,
-				val,
-			)
+	adder := func(label string, val interface{}) string {
+		return fmt.Sprintf(
+			"[%s]%v\n",
+			label,
+			val,
+		)
+	}
+
+	for _, v := range Arecords {
+		content += adder("A", v.A)
+	}
+	for _, v := range AAAArecords {
+		content += adder("AAAA", v.AAAA)
+	}
+	for _, v := range CNAMErecords {
+		content += adder("CNAME", v.Target)
+	}
+
+	noResults := len(Arecords) == 0 && len(AAAArecords) == 0 && len(CNAMErecords) == 0
+
+	if noResults {
+		content = "EMPTY"
+	}
+	resultNode := g.Node(content).
+		Attr("style", "filled")
+
+	if len(CNAMErecords) == 0 && !noResults {
+		resultNode.
+			Attr("fillcolor", "#00FF1F")
+	}
+
+	if noResults {
+		resultNode.
+			Attr("fillcolor", "#FF1000")
+	}
+
+	g.Edge(
+		parentNode,
+		resultNode,
+		rcodeLabel(target, res.MsgHdr.Rcode),
+	).
+		Attr("arrowhead", "vee").
+		Attr("arrowtail", "inv").
+		Attr("arrowsize", ".7").
+		Attr("color", authoritativeOrNot).
+		//
+		Attr("fontname", "bold").
+		Attr("fontsize", "7.0").
+		Attr("style", "bold").
+		Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+
+	if cname, ok := hasCNAME(res.Answer); ok {
+		debug("	cname:", cname.Target)
+
+		exists, err := DomainExists(cname.Target)
+		if err != nil {
+			panic(err)
 		}
-
-		for _, v := range Arecords {
-			content += adder("A", v.A)
-		}
-		for _, v := range AAAArecords {
-			content += adder("AAAA", v.AAAA)
-		}
-		for _, v := range CNAMErecords {
-			content += adder("CNAME", v.Target)
-		}
-
-		resultNode := g.Node(content).
-			Attr("style", "filled")
-
-		if len(CNAMErecords) == 0 {
+		if exists {
 			resultNode.
 				Attr("fillcolor", "#00FF1F")
+		} else {
+			resultNode.
+				Attr("fillcolor", "#FF1000")
 		}
 
-		g.Edge(
-			parentNode,
-			resultNode,
-			rcodeLabel(target, res.MsgHdr.Rcode),
-		).
-			Attr("arrowhead", "vee").
-			Attr("arrowtail", "inv").
-			Attr("arrowsize", ".7").
-			Attr("color", "#0099ff").
-			//
-			Attr("fontname", "bold").
-			Attr("fontsize", "7.0").
-			Attr("style", "bold").
-			Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+		target = cname.Target
+		authority = rootNS
+		parentNode = resultNode
 
-		if cname, ok := hasCNAME(res.Answer); ok {
-			debug("	cname:", cname.Target)
-
-			exists, err := DomainExists(cname.Target)
-			if err != nil {
-				panic(err)
-			}
-			if exists {
-				resultNode.
-					Attr("fillcolor", "#00FF1F")
-			} else {
-				resultNode.
-					Attr("fillcolor", "#FF1000")
-			}
-
-			target = cname.Target
-			authority = rootNS
-			parentNode = resultNode
-
-			goExplore(g, parentNode, authority, target, queryType)
-		}
+		goExplore(g, parentNode, authority, target, queryType)
 	}
 }
 
