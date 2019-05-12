@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/emicklei/dot"
 	"github.com/miekg/dns"
+	"gopkg.in/pipe.v2"
 )
 
 // cd $GOPATH/src/github.com/d1ss0lv3/trust-trees-go
@@ -24,13 +26,14 @@ var rootNS = getRandomRootDNS()
 
 func main() {
 	targets := []string{
+		"vapi.uber.com",
 		"ticonsultores.biz.ni",
 		"adblock-data.brave.com",
 		"mail.google.com",
 		"example.com",
 		"ledger.brave.com",
 	}
-	generateGraphsFor(targets[0])
+	generateGraphsFor(targets...)
 }
 
 func generateGraphsFor(targets ...string) {
@@ -43,6 +46,11 @@ func generateGraphsFor(targets ...string) {
 }
 
 func generateGraphFor(target string) error {
+	debugf(
+		"starting graphing %q...",
+		target,
+	)
+
 	// create and initialize a new graph:
 	gph := dot.NewGraph(dot.Directed)
 	gph.Attr("label", target+" DNS Trust Graph")
@@ -73,8 +81,34 @@ func generateGraphFor(target string) error {
 		goExplore(gph, parentNode, authority, target, queryType)
 	}
 
-	// output dot graph:
-	fmt.Println(gph.String())
+	// time format for the filename:
+	timeFormat := "Mon02Jan2006_15.04.05"
+
+	// save graphs in the "./generated" folder
+	dir := "generated"
+	// format filename and destination:
+	file := fmt.Sprintf("%s-%s.svg", target, time.Now().Format(timeFormat))
+	path := filepath.Join(dir, file)
+
+	debugf(
+		"generating graph for %q...",
+		target,
+	)
+	// pipeline the dot file, svg, to final file:
+	p := pipe.Line(
+		pipe.Print(gph.String()),
+		pipe.Exec("dot", "-Tsvg"),
+		pipe.WriteFile(path, 0640),
+	)
+	err := pipe.Run(p)
+	if err != nil {
+		return err
+	}
+
+	debugf(
+		"finished %q",
+		target,
+	)
 	return nil
 }
 
@@ -138,8 +172,8 @@ func goExplore(
 		nextAuthorities := extractNS(res.Ns)
 
 		for authIndex := range nextAuthorities {
-			style := "dashed"
 			auth := nextAuthorities[authIndex]
+			style := "dashed"
 			//let's make it bold if the NS is gonna be used for the
 			// next query:
 			authorityNode := g.Node(auth.Ns)
