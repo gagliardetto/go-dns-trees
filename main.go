@@ -2,17 +2,20 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/emicklei/dot"
+	"github.com/gagliardetto/utils"
 	"github.com/miekg/dns"
 	"gopkg.in/pipe.v2"
 )
@@ -23,10 +26,47 @@ import (
 
 var rootNS = getRandomRootDNS()
 
-var queryNum int
+const (
+	defaultDir = "generated"
+)
+
+var (
+	outputDir string
+)
 
 func main() {
-	targets := []string{
+	targetFile := flag.String("tF", "", "/path/to/domain/list.txt")
+	outputFolder := flag.String("of", defaultDir, "/path/to/output/folder")
+	flag.Parse()
+
+	// targets contains the list of target domains (sourced from the cli args and from list file)
+	targets := flag.Args()
+
+	{
+		outputDir = *outputFolder
+		err := utils.CreateFolderIfNotExists(outputDir, 0640)
+		if err != nil {
+			panic(err)
+		}
+	}
+	// add targets from file:
+	{
+		if targetFile != nil && *targetFile != "" {
+			err := utils.ReadFileLinesAsString(*targetFile, func(target string) bool {
+				targets = append(targets, target)
+				return true
+			})
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	// args:
+	// just nothing
+	// --dF=/path/to/domain/list.txt
+	// --folder=/path/to/output/folder
+	targets1 := []string{
 		"vapi.uber.com",
 		"ticonsultores.biz.ni",
 		"adblock-data.brave.com",
@@ -34,6 +74,12 @@ func main() {
 		"example.com",
 		"ledger.brave.com",
 	}
+	targets2 := []string{
+		"io.",
+		"com.",
+	}
+	_ = targets1
+	_ = targets2
 	generateGraphsFor(targets...)
 }
 
@@ -52,6 +98,7 @@ func generateGraphFor(target string) error {
 		target,
 	)
 	queryNum = 1
+	registry = map[string]bool{}
 
 	// create and initialize a new graph:
 	gph := dot.NewGraph(dot.Directed)
@@ -89,7 +136,7 @@ func generateGraphFor(target string) error {
 	// save graphs in the "./generated" folder
 	dir := "generated"
 	// format filename and destination:
-	file := fmt.Sprintf("%s-%s.svg", target, time.Now().Format(timeFormat))
+	file := sanitizeFileNamePart(fmt.Sprintf("%s-%s.svg", target, time.Now().Format(timeFormat)))
 	path := filepath.Join(dir, file)
 
 	debugf(
@@ -115,7 +162,16 @@ func generateGraphFor(target string) error {
 	return nil
 }
 
+var illegalFileNameCharacters = regexp.MustCompile(`[^[a-zA-Z0-9]-_]`)
+
+func sanitizeFileNamePart(part string) string {
+	part = strings.Replace(part, "/", "-", -1)
+	part = illegalFileNameCharacters.ReplaceAllString(part, "")
+	return part
+}
+
 var (
+	queryNum int
 	registry = map[string]bool{}
 	mu       *sync.RWMutex
 )
@@ -156,8 +212,12 @@ func goExplore(
 	res, err := Send(authority, target, queryType)
 	if err != nil {
 		if isErrNoSuchHost(err) {
-			debugf("	%q: no such host", authority)
+			debugf("	%q: no such host: %v", authority, err)
 			addErrorNode(g, parentNode, authority, "no such host")
+			return
+		} else if isErrIOTimeout(err) {
+			debugf("	%q: I/O timeout: %v", authority, err)
+			addErrorNode(g, parentNode, authority, "TIMEOUT")
 			return
 		} else {
 			panic(err)
@@ -217,15 +277,15 @@ func goExplore(
 		//return
 	}
 
-	var authoritativeOrNot string
+	var colorAuthoritativeOrNot string
 	if res.Authoritative {
-		authoritativeOrNot = "#0099ff"
+		colorAuthoritativeOrNot = "#0099ff"
 	} else {
-		authoritativeOrNot = "#FF8A00"
+		colorAuthoritativeOrNot = "#FF8A00"
 	}
 	parentNode.
 		Attr("style", "filled").
-		Attr("fillcolor", authoritativeOrNot)
+		Attr("fillcolor", colorAuthoritativeOrNot)
 
 	Arecords := extractA(res.Answer)
 	AAAArecords := extractAAAA(res.Answer)
@@ -255,7 +315,7 @@ func goExplore(
 			Attr("arrowhead", "vee").
 			Attr("arrowtail", "inv").
 			Attr("arrowsize", ".7").
-			Attr("color", authoritativeOrNot).
+			Attr("color", colorAuthoritativeOrNot).
 			//
 			Attr("fontname", "bold").
 			Attr("fontsize", "7.0").
@@ -277,7 +337,7 @@ func goExplore(
 				Attr("arrowhead", "vee").
 				Attr("arrowtail", "inv").
 				Attr("arrowsize", ".7").
-				Attr("color", authoritativeOrNot).
+				Attr("color", colorAuthoritativeOrNot).
 				//
 				Attr("fontname", "bold").
 				Attr("fontsize", "7.0").
@@ -298,7 +358,7 @@ func goExplore(
 				Attr("arrowhead", "vee").
 				Attr("arrowtail", "inv").
 				Attr("arrowsize", ".7").
-				Attr("color", authoritativeOrNot).
+				Attr("color", colorAuthoritativeOrNot).
 				//
 				Attr("fontname", "bold").
 				Attr("fontsize", "7.0").
@@ -318,7 +378,7 @@ func goExplore(
 				Attr("arrowhead", "vee").
 				Attr("arrowtail", "inv").
 				Attr("arrowsize", ".7").
-				Attr("color", authoritativeOrNot).
+				Attr("color", colorAuthoritativeOrNot).
 				//
 				Attr("fontname", "bold").
 				Attr("fontsize", "7.0").
@@ -374,7 +434,9 @@ func addErrorNode(g *dot.Graph, parentNode dot.Node, content string, label strin
 func isErrNoSuchHost(e error) bool {
 	return strings.Contains(e.Error(), "no such host")
 }
-
+func isErrIOTimeout(e error) bool {
+	return strings.Contains(e.Error(), "i/o timeout")
+}
 func stripFinalDot(s string) string {
 	return strings.TrimSuffix(s, ".")
 }
