@@ -227,11 +227,11 @@ func goExplore(
 		Attr("style", "filled").
 		Attr("fillcolor", authoritativeOrNot)
 
-	var content string
-
 	Arecords := extractA(res.Answer)
 	AAAArecords := extractAAAA(res.Answer)
 	CNAMErecords := extractCNAME(res.Answer)
+
+	noResults := len(Arecords) == 0 && len(AAAArecords) == 0 && len(CNAMErecords) == 0
 
 	adder := func(label string, val interface{}) string {
 		return fmt.Sprintf(
@@ -241,69 +241,111 @@ func goExplore(
 		)
 	}
 
-	for _, v := range Arecords {
-		content += adder("A", v.A)
-	}
-	for _, v := range AAAArecords {
-		content += adder("AAAA", v.AAAA)
-	}
-	for _, v := range CNAMErecords {
-		content += adder("CNAME", v.Target)
-	}
-
-	noResults := len(Arecords) == 0 && len(AAAArecords) == 0 && len(CNAMErecords) == 0
-
 	if noResults {
-		content = "EMPTY"
-	}
-	resultNode := g.Node(content).
-		Attr("style", "filled")
-
-	if len(CNAMErecords) == 0 && !noResults {
-		resultNode.
-			Attr("fillcolor", "#00FF1F")
-	}
-
-	if noResults {
-		resultNode.
+		emptyResultNode := g.
+			Node("EMPTY").
+			Attr("style", "filled").
 			Attr("fillcolor", "#FF1000")
-	}
 
-	g.Edge(
-		parentNode,
-		resultNode,
-		rcodeLabel(target, res.MsgHdr.Rcode),
-	).
-		Attr("arrowhead", "vee").
-		Attr("arrowtail", "inv").
-		Attr("arrowsize", ".7").
-		Attr("color", authoritativeOrNot).
-		//
-		Attr("fontname", "bold").
-		Attr("fontsize", "7.0").
-		Attr("style", "bold").
-		Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+		g.Edge(
+			parentNode,
+			emptyResultNode,
+			rcodeLabel(target, res.MsgHdr.Rcode),
+		).
+			Attr("arrowhead", "vee").
+			Attr("arrowtail", "inv").
+			Attr("arrowsize", ".7").
+			Attr("color", authoritativeOrNot).
+			//
+			Attr("fontname", "bold").
+			Attr("fontsize", "7.0").
+			Attr("style", "bold").
+			Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+	} else {
 
-	if cname, ok := hasCNAME(res.Answer); ok {
-		debug("	cname:", cname.Target)
-
-		exists, err := DomainExists(cname.Target)
-		if err != nil {
-			panic(err)
-		}
-		if exists {
-			resultNode.
+		for _, v := range Arecords {
+			AresultNode := g.
+				Node(adder("A", v.A)).
+				Attr("style", "filled").
 				Attr("fillcolor", "#00FF1F")
-		} else {
-			resultNode.
-				Attr("fillcolor", "#FF1000")
+
+			g.Edge(
+				parentNode,
+				AresultNode,
+				rcodeLabel(target, res.MsgHdr.Rcode),
+			).
+				Attr("arrowhead", "vee").
+				Attr("arrowtail", "inv").
+				Attr("arrowsize", ".7").
+				Attr("color", authoritativeOrNot).
+				//
+				Attr("fontname", "bold").
+				Attr("fontsize", "7.0").
+				Attr("style", "bold").
+				Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+		}
+		for _, v := range AAAArecords {
+			AAAAresultNode := g.
+				Node(adder("AAAA", v.AAAA)).
+				Attr("style", "filled").
+				Attr("fillcolor", "#00FF1F")
+
+			g.Edge(
+				parentNode,
+				AAAAresultNode,
+				rcodeLabel(target, res.MsgHdr.Rcode),
+			).
+				Attr("arrowhead", "vee").
+				Attr("arrowtail", "inv").
+				Attr("arrowsize", ".7").
+				Attr("color", authoritativeOrNot).
+				//
+				Attr("fontname", "bold").
+				Attr("fontsize", "7.0").
+				Attr("style", "bold").
+				Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+		}
+		for _, v := range CNAMErecords {
+			CNAMEresultNode := g.
+				Node(adder("CNAME", v.Target)).
+				Attr("style", "filled")
+
+			g.Edge(
+				parentNode,
+				CNAMEresultNode,
+				rcodeLabel(target, res.MsgHdr.Rcode),
+			).
+				Attr("arrowhead", "vee").
+				Attr("arrowtail", "inv").
+				Attr("arrowsize", ".7").
+				Attr("color", authoritativeOrNot).
+				//
+				Attr("fontname", "bold").
+				Attr("fontsize", "7.0").
+				Attr("style", "bold").
+				Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+
+			debug("	cname:", v.Target)
+
+			exists, err := DomainExists(v.Target)
+			if err != nil {
+				panic(err)
+			}
+			if exists {
+				CNAMEresultNode.
+					Attr("fillcolor", "#00FF1F")
+			} else {
+				CNAMEresultNode.
+					Attr("fillcolor", "#FF1000")
+			}
+
+			target = v.Target
+			authority = rootNS
+			parentNode = CNAMEresultNode
+
+			goExplore(g, parentNode, authority, target, queryType)
 		}
 
-		target = cname.Target
-		authority = rootNS
-		parentNode = resultNode
-
-		goExplore(g, parentNode, authority, target, queryType)
 	}
 }
 
