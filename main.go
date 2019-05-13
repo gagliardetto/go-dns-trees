@@ -43,14 +43,16 @@ func main() {
 	targets := flag.Args()
 
 	{
+		// create output folder (if not exists):
 		outputDir = *outputFolder
 		err := utils.CreateFolderIfNotExists(outputDir, 0640)
 		if err != nil {
 			panic(err)
 		}
 	}
-	// add targets from file:
+
 	{
+		// add targets from file:
 		if targetFile != nil && *targetFile != "" {
 			err := utils.ReadFileLinesAsString(*targetFile, func(target string) bool {
 				targets = append(targets, target)
@@ -213,7 +215,7 @@ func goExplore(
 	if err != nil {
 		if isErrNoSuchHost(err) {
 			debugf("	%q: no such host: %v", authority, err)
-			addErrorNode(g, parentNode, authority, "no such host")
+			addErrorNode(g, parentNode, authority, "NO SUCH HOST")
 			return
 		} else if isErrIOTimeout(err) {
 			debugf("	%q: I/O timeout: %v", authority, err)
@@ -504,17 +506,6 @@ func chooseRandomNS(ns []*dns.NS) *dns.NS {
 		return nil
 	}
 	return ns[randomInt(0, len(ns)-1)]
-}
-
-func hasCNAME(rr []dns.RR) (*dns.CNAME, bool) {
-	var cname *dns.CNAME
-	for i := range rr {
-		a := rr[i]
-		if _, ok := a.(*dns.CNAME); ok {
-			cname = a.(*dns.CNAME)
-		}
-	}
-	return cname, cname != nil
 }
 
 func extractA(rr []dns.RR) []*dns.A {
