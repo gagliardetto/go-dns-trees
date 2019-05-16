@@ -82,6 +82,12 @@ func main() {
 	_ = testTargets1
 	_ = testTargets2
 	generateGraphsFor(targets...)
+
+	bellSound()
+}
+
+func bellSound() {
+	fmt.Print("\007")
 }
 
 func generateGraphsFor(targets ...string) {
