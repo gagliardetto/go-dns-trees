@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/emicklei/dot"
-	"github.com/gagliardetto/utils"
+	. "github.com/gagliardetto/utils"
 	"github.com/miekg/dns"
 	"gopkg.in/pipe.v2"
 )
@@ -29,14 +29,18 @@ var rootNS = getRandomRootDNS()
 const (
 	defaultDir = "generated"
 )
+const (
+	colorRed   = "#FF1000"
+	colorGreen = "#00FF1F"
+)
 
 var (
 	outputDir string
 )
 
 func main() {
-	targetFile := flag.String("tF", "", "/path/to/domain/list.txt")
-	outputFolder := flag.String("of", defaultDir, "/path/to/output/folder")
+	targetFile := flag.String("f", "", "/path/to/domain/list.txt")
+	outputFolder := flag.String("oF", defaultDir, "/path/to/output/folder")
 	flag.Parse()
 
 	// targets contains the list of target domains (sourced from the cli args and from list file)
@@ -45,7 +49,7 @@ func main() {
 	{
 		// create output folder (if not exists):
 		outputDir = *outputFolder
-		err := utils.CreateFolderIfNotExists(outputDir, 0640)
+		err := CreateFolderIfNotExists(outputDir, 0640)
 		if err != nil {
 			panic(err)
 		}
@@ -54,7 +58,7 @@ func main() {
 	{
 		// add targets from file:
 		if targetFile != nil && *targetFile != "" {
-			err := utils.ReadFileLinesAsString(*targetFile, func(target string) bool {
+			err := ReadFileLinesAsString(*targetFile, func(target string) bool {
 				targets = append(targets, target)
 				return true
 			})
@@ -64,24 +68,19 @@ func main() {
 		}
 	}
 
-	// args:
-	// just nothing
-	// --dF=/path/to/domain/list.txt
-	// --folder=/path/to/output/folder
-	targets1 := []string{
-		"vapi.uber.com",
+	testTargets1 := []string{
 		"ticonsultores.biz.ni",
 		"adblock-data.brave.com",
 		"mail.google.com",
 		"example.com",
 		"ledger.brave.com",
 	}
-	targets2 := []string{
+	testTargets2 := []string{
 		"io.",
 		"com.",
 	}
-	_ = targets1
-	_ = targets2
+	_ = testTargets1
+	_ = testTargets2
 	generateGraphsFor(targets...)
 }
 
@@ -194,7 +193,12 @@ func MarkAsFollowed(id string) {
 	defer mu.Unlock()
 	registry[id] = true
 }
-
+func constantTwoDigitSpace(i int) string {
+	if i < 10 {
+		return "0" + fmt.Sprint(i)
+	}
+	return fmt.Sprint(i)
+}
 func goExplore(
 	g *dot.Graph,
 	parentNode dot.Node,
@@ -204,7 +208,7 @@ func goExplore(
 ) {
 	debugf(
 		"query#%v: authority:%q, target:%q",
-		queryNum,
+		constantTwoDigitSpace(queryNum),
 		authority,
 		target,
 	)
@@ -213,12 +217,13 @@ func goExplore(
 	// send the query and get the response:
 	res, err := Send(authority, target, queryType)
 	if err != nil {
+
 		if isErrNoSuchHost(err) {
-			debugf("	%q: no such host: %v", authority, err)
+			debugf(Red("	  %q: no such host: %v"), authority, err)
 			addErrorNode(g, parentNode, authority, "NO SUCH HOST")
 			return
 		} else if isErrIOTimeout(err) {
-			debugf("	%q: I/O timeout: %v", authority, err)
+			debugf(Red("	  %q: I/O timeout: %v"), authority, err)
 			addErrorNode(g, parentNode, authority, "TIMEOUT")
 			return
 		} else {
@@ -228,7 +233,7 @@ func goExplore(
 
 	hasNextAuthority := len(res.Ns) > 0
 	debugf(
-		"	 answer: isAuthoritative:%v, hasNextAuthority:%v",
+		"	  answer: isAuthoritative:%v, hasNextAuthority:%v",
 		res.Authoritative,
 		hasNextAuthority,
 	)
@@ -280,10 +285,12 @@ func goExplore(
 	}
 
 	var colorAuthoritativeOrNot string
+	const colorAuthoritative = "#0099ff"
+	const colorNOTAuthoritative = "#FF8A00"
 	if res.Authoritative {
-		colorAuthoritativeOrNot = "#0099ff"
+		colorAuthoritativeOrNot = colorAuthoritative
 	} else {
-		colorAuthoritativeOrNot = "#FF8A00"
+		colorAuthoritativeOrNot = colorNOTAuthoritative
 	}
 	parentNode.
 		Attr("style", "filled").
@@ -295,7 +302,7 @@ func goExplore(
 
 	noResults := len(Arecords) == 0 && len(AAAArecords) == 0 && len(CNAMErecords) == 0
 
-	adder := func(label string, val interface{}) string {
+	rrFormatter := func(label string, val interface{}) string {
 		return fmt.Sprintf(
 			"[%s]%v\n",
 			label,
@@ -304,90 +311,70 @@ func goExplore(
 	}
 
 	if noResults {
+		emptyNodeText := "EMPTY"
 		emptyResultNode := g.
-			Node("EMPTY").
+			Node(emptyNodeText).
 			Attr("style", "filled").
-			Attr("fillcolor", "#FF1000")
+			Attr("fillcolor", colorRed)
 
-		g.Edge(
+		rrEdge(g,
 			parentNode,
 			emptyResultNode,
 			rcodeLabel(target, res.MsgHdr.Rcode),
-		).
-			Attr("arrowhead", "vee").
-			Attr("arrowtail", "inv").
-			Attr("arrowsize", ".7").
-			Attr("color", colorAuthoritativeOrNot).
-			//
-			Attr("fontname", "bold").
-			Attr("fontsize", "7.0").
-			Attr("style", "bold").
-			Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+			colorAuthoritativeOrNot,
+			RcodeToColor[res.MsgHdr.Rcode],
+		)
+
 	} else {
 
 		for _, v := range Arecords {
 			AresultNode := g.
-				Node(adder("A", v.A)).
+				Node(rrFormatter("A", v.A)).
 				Attr("style", "filled").
-				Attr("fillcolor", "#00FF1F")
+				Attr("fillcolor", colorGreen)
 
-			g.Edge(
+			debug("	  A:", v.A)
+
+			rrEdge(g,
 				parentNode,
 				AresultNode,
 				rcodeLabel(target, res.MsgHdr.Rcode),
-			).
-				Attr("arrowhead", "vee").
-				Attr("arrowtail", "inv").
-				Attr("arrowsize", ".7").
-				Attr("color", colorAuthoritativeOrNot).
-				//
-				Attr("fontname", "bold").
-				Attr("fontsize", "7.0").
-				Attr("style", "bold").
-				Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+				colorAuthoritativeOrNot,
+				RcodeToColor[res.MsgHdr.Rcode],
+			)
+
 		}
 		for _, v := range AAAArecords {
 			AAAAresultNode := g.
-				Node(adder("AAAA", v.AAAA)).
+				Node(rrFormatter("AAAA", v.AAAA)).
 				Attr("style", "filled").
-				Attr("fillcolor", "#00FF1F")
+				Attr("fillcolor", colorGreen)
 
-			g.Edge(
+			debug("	  AAAA:", v.AAAA)
+
+			rrEdge(g,
 				parentNode,
 				AAAAresultNode,
 				rcodeLabel(target, res.MsgHdr.Rcode),
-			).
-				Attr("arrowhead", "vee").
-				Attr("arrowtail", "inv").
-				Attr("arrowsize", ".7").
-				Attr("color", colorAuthoritativeOrNot).
-				//
-				Attr("fontname", "bold").
-				Attr("fontsize", "7.0").
-				Attr("style", "bold").
-				Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+				colorAuthoritativeOrNot,
+				RcodeToColor[res.MsgHdr.Rcode],
+			)
+
 		}
 		for _, v := range CNAMErecords {
 			CNAMEresultNode := g.
-				Node(adder("CNAME", v.Target)).
+				Node(rrFormatter("CNAME", v.Target)).
 				Attr("style", "filled")
 
-			g.Edge(
+			rrEdge(g,
 				parentNode,
 				CNAMEresultNode,
 				rcodeLabel(target, res.MsgHdr.Rcode),
-			).
-				Attr("arrowhead", "vee").
-				Attr("arrowtail", "inv").
-				Attr("arrowsize", ".7").
-				Attr("color", colorAuthoritativeOrNot).
-				//
-				Attr("fontname", "bold").
-				Attr("fontsize", "7.0").
-				Attr("style", "bold").
-				Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
+				colorAuthoritativeOrNot,
+				RcodeToColor[res.MsgHdr.Rcode],
+			)
 
-			debug("	cname:", v.Target)
+			debug("	  CNAME:", v.Target)
 
 			exists, err := DomainExists(v.Target)
 			if err != nil {
@@ -395,10 +382,10 @@ func goExplore(
 			}
 			if exists {
 				CNAMEresultNode.
-					Attr("fillcolor", "#00FF1F")
+					Attr("fillcolor", colorGreen)
 			} else {
 				CNAMEresultNode.
-					Attr("fillcolor", "#FF1000")
+					Attr("fillcolor", colorRed)
 			}
 
 			target = v.Target
@@ -411,10 +398,35 @@ func goExplore(
 	}
 }
 
+func rrEdge(
+	gph *dot.Graph,
+	parent dot.Node,
+	child dot.Node,
+	label string,
+	color string,
+	fontcolor string,
+) {
+
+	gph.Edge(
+		parent,
+		child,
+		label,
+	).
+		Attr("arrowhead", "vee").
+		Attr("arrowtail", "inv").
+		Attr("arrowsize", ".7").
+		Attr("color", color).
+		//
+		Attr("fontname", "bold").
+		Attr("fontsize", "7.0").
+		Attr("style", "bold").
+		Attr("fontcolor", fontcolor)
+}
+
 func addErrorNode(g *dot.Graph, parentNode dot.Node, content string, label string) {
 	errorNode := g.Node(content).
 		Attr("style", "filled").
-		Attr("fillcolor", "red")
+		Attr("fillcolor", colorRed)
 
 	style := "dashed"
 
@@ -430,7 +442,7 @@ func addErrorNode(g *dot.Graph, parentNode dot.Node, content string, label strin
 		Attr("fontname", "bold").
 		Attr("fontsize", "7.0").
 		Attr("style", style).
-		Attr("fontcolor", "red")
+		Attr("fontcolor", colorRed)
 }
 
 func isErrNoSuchHost(e error) bool {
@@ -566,12 +578,12 @@ func DomainExists(domain string) (bool, error) {
 
 // RcodeToColor maps Rcodes to colors.
 var RcodeToColor = map[int]string{
-	dns.RcodeSuccess:        "green",
+	dns.RcodeSuccess:        colorGreen,
 	dns.RcodeFormatError:    "orange",
-	dns.RcodeServerFailure:  "red",
-	dns.RcodeNameError:      "red", // TODO: maybe use another color to distinguish from dns.RcodeServerFailure?
-	dns.RcodeNotImplemented: "red",
-	dns.RcodeRefused:        "red",
+	dns.RcodeServerFailure:  colorRed,
+	dns.RcodeNameError:      colorRed, // TODO: maybe use another color to distinguish from dns.RcodeServerFailure?
+	dns.RcodeNotImplemented: colorRed,
+	dns.RcodeRefused:        colorRed,
 	dns.RcodeYXDomain:       "purple", // See RFC 2136
 	dns.RcodeYXRrset:        "purple",
 	dns.RcodeNXRrset:        "purple",
