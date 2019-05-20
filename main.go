@@ -46,9 +46,10 @@ const (
 	asnTimeFormat      = "Mon02Jan2006"
 )
 const (
-	colorRed   = "#FF1000"
-	colorGreen = "#08CF20"
-	colorASN   = "#FF00DF"
+	colorRed       = "#FF1000"
+	colorGreen     = "#08CF20"
+	colorSecondary = "#00710D"
+	colorASN       = "#FF00DF"
 )
 const (
 	// LevelTargetOnly means only the primary target will be explored.
@@ -171,7 +172,7 @@ func generateGraphFor(target string) error {
 		authority = rootNS
 		parentNode = zeroNode
 
-		explore(gph, parentNode, authority, target, queryType)
+		explore(gph, parentNode, authority, target, queryType, false)
 	}
 
 	{
@@ -199,7 +200,7 @@ func generateGraphFor(target string) error {
 
 			for targetNS := range registryOfNameServers {
 				if !skip(targetNS) {
-					explore(gph, parentNode, authority, targetNS, queryType)
+					explore(gph, parentNode, authority, targetNS, queryType, true)
 				}
 			}
 		}
@@ -285,6 +286,7 @@ func explore(
 	authority string,
 	target string,
 	queryType uint16,
+	isSecondary bool,
 ) {
 	registryOfNameServers[authority] = true
 	debugf(
@@ -351,7 +353,7 @@ func explore(
 
 			if !AlreadyFollowed(pathID) {
 				MarkAsFollowed(pathID)
-				explore(g, authorityNode, auth.Ns, target, queryType)
+				explore(g, authorityNode, auth.Ns, target, queryType, isSecondary)
 			}
 		}
 
@@ -412,10 +414,15 @@ func explore(
 	} else {
 
 		for _, v := range Arecords {
+
+			fillcolor := colorGreen
+			if isSecondary {
+				fillcolor = colorSecondary
+			}
 			AresultNode := g.
 				Node(rrFormatter("A", v.A)).
 				Attr("style", "filled").
-				Attr("fillcolor", colorGreen)
+				Attr("fillcolor", fillcolor)
 
 			debug("	  A:", v.A)
 
@@ -523,7 +530,7 @@ func explore(
 			authority = rootNS
 			parentNode = CNAMEresultNode
 
-			explore(g, parentNode, authority, target, queryType)
+			explore(g, parentNode, authority, target, queryType, isSecondary)
 		}
 
 	}
