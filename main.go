@@ -28,9 +28,18 @@ import (
 // go run main.go | dot -Tsvg  >| test.svg
 // go run main.go | dot -Tsvg  >| generated/$(date +"%a%d%b%Y_%H.%M.%S").svg
 
-var rootNS = getRandomRootDNS()
+var (
+	// rootNS is the default (choosen randomly at startup) root NS
+	// used all throughout the execution of this program:
+	rootNS = getRandomRootDNS()
+	// defaultDotComNS is the default NS used for the resolution of
+	// .com domains:
+	defaultDotComNS = "a.gtld-servers.net."
+)
 
 const (
+	// defaultDir is the default directory name where the
+	// generated graphs will be saved to
 	defaultDir = "generated"
 	// time format for the filename:
 	filenameTimeFormat = "Mon02Jan2006_15.04.05"
@@ -38,18 +47,48 @@ const (
 )
 const (
 	colorRed   = "#FF1000"
-	colorGreen = "#00FF1F"
+	colorGreen = "#08CF20"
 	colorASN   = "#FF00DF"
+)
+const (
+	// LevelTargetOnly means only the primary target will be explored.
+	LevelTargetOnly = 1
+	// LevelSecond means that the DNS of the primary target will become
+	// secondary targets, and they will also be explored.
+	LevelSecond = 2
 )
 
 var (
+	// outputDir is the directory that will contain all the generated graphs
 	outputDir string
+)
+
+// options:
+var (
+	// useOnlyDefaultNSForDotCom tells whether to use only one
+	// default DNS for the resolution of .com domains.
+	useOnlyDefaultNSForDotCom = true
+	// explorationLevels tells whether to explore the paths to the
+	// target host, or also explore the paths to the DNS of the target
+	// (which means the DNS of the primary target become the secondary
+	// targets)
+	explorationLevels = LevelTargetOnly
 )
 
 func main() {
 	targetFile := flag.String("f", "", "/path/to/domain/list.txt")
-	outputFolder := flag.String("oF", defaultDir, "/path/to/output/folder")
+	ptrOutputDir := flag.String("oF", defaultDir, "/path/to/output/folder")
+	goDeeper := flag.Bool("deeper", false, "also traverse the NS of the target as additional targets")
+	ptrUseDefaultNsForCom := flag.Bool("one-com", true, "use only one default *.gtld-servers.net. NS (authoritative for com.) to avoid noise")
 	flag.Parse()
+
+	if goDeeper != nil && *goDeeper {
+		explorationLevels = LevelSecond
+	}
+
+	if ptrUseDefaultNsForCom != nil {
+		useOnlyDefaultNSForDotCom = *ptrUseDefaultNsForCom
+	}
 
 	// targets contains the list of target domains (sourced from the cli args and from list file)
 	var targets []string
@@ -57,7 +96,7 @@ func main() {
 
 	{
 		// create output folder (if not exists):
-		outputDir = *outputFolder
+		outputDir = *ptrOutputDir
 		err := CreateFolderIfNotExists(outputDir, 0640)
 		if err != nil {
 			panic(err)
@@ -101,7 +140,8 @@ func generateGraphFor(target string) error {
 		target,
 	)
 	queryNum = 1
-	registry = map[string]bool{}
+	registryOfFollowedPaths = map[string]bool{}
+	registryOfNameServers = map[string]bool{}
 
 	// create and initialize a new graph:
 	gph := dot.NewGraph(dot.Directed)
@@ -130,23 +170,62 @@ func generateGraphFor(target string) error {
 		authority = rootNS
 		parentNode = zeroNode
 
-		goExplore(gph, parentNode, authority, target, queryType)
+		explore(gph, parentNode, authority, target, queryType)
+	}
+
+	{
+		if explorationLevels > LevelTargetOnly {
+			// skip root and .com ns
+			skip := func(targetNS string) bool {
+				return strings.HasSuffix(targetNS, ".gtld-servers.net.") || strings.HasSuffix(targetNS, ".root-servers.net.")
+			}
+			{
+				debugf(
+					"\nstarting graphing secondary targets:\n",
+				)
+				for secondaryTarget := range registryOfNameServers {
+					if !skip(secondaryTarget) {
+						debug(secondaryTarget)
+					}
+				}
+				debug("\n")
+			}
+			var authority string
+			var parentNode dot.Node
+
+			authority = rootNS
+			parentNode = zeroNode
+
+			for targetNS := range registryOfNameServers {
+				if !skip(targetNS) {
+					explore(gph, parentNode, authority, targetNS, queryType)
+				}
+			}
+		}
 	}
 
 	// save graphs in the "./generated" folder
 	dir := "generated"
+
+	// file format
+	fileFormat := "svg"
 	// format filename and destination:
-	file := sanitizeFileNamePart(fmt.Sprintf("%s-%s.svg", target, time.Now().Format(filenameTimeFormat)))
+	file := sanitizeFileNamePart(fmt.Sprintf(
+		"%s-%s.%s",
+		target,
+		time.Now().Format(filenameTimeFormat),
+		fileFormat,
+	))
 	path := filepath.Join(dir, file)
 
 	debugf(
 		"generating graph for %q...",
 		target,
 	)
-	// pipeline the dot file, svg, to final file:
+	// pipeline the dot graph, image data, to final file:
 	p := pipe.Line(
 		pipe.Print(gph.String()),
-		pipe.Exec("dot", "-Tsvg"),
+		pipe.Exec("dot", "-T"+fileFormat),
 		pipe.WriteFile(path, 0640),
 	)
 	err := pipe.Run(p)
@@ -171,9 +250,10 @@ func sanitizeFileNamePart(part string) string {
 }
 
 var (
-	queryNum int
-	registry = map[string]bool{}
-	mu       *sync.RWMutex
+	queryNum                int
+	registryOfFollowedPaths = map[string]bool{}
+	registryOfNameServers   = map[string]bool{}
+	mu                      *sync.RWMutex
 )
 
 func init() {
@@ -183,14 +263,14 @@ func init() {
 func AlreadyFollowed(id string) bool {
 	mu.RLock()
 	defer mu.RUnlock()
-	_, has := registry[id]
+	_, has := registryOfFollowedPaths[id]
 	return has
 }
 
 func MarkAsFollowed(id string) {
 	mu.Lock()
 	defer mu.Unlock()
-	registry[id] = true
+	registryOfFollowedPaths[id] = true
 }
 func constantTwoDigitSpace(i int) string {
 	if i < 10 {
@@ -198,13 +278,14 @@ func constantTwoDigitSpace(i int) string {
 	}
 	return fmt.Sprint(i)
 }
-func goExplore(
+func explore(
 	g *dot.Graph,
 	parentNode dot.Node,
 	authority string,
 	target string,
 	queryType uint16,
 ) {
+	registryOfNameServers[authority] = true
 	debugf(
 		"query#%v: authority:%q, target:%q",
 		constantTwoDigitSpace(queryNum),
@@ -237,15 +318,18 @@ func goExplore(
 		hasNextAuthority,
 	)
 	if !res.Authoritative && hasNextAuthority {
-		// given that we expect this call to get a non-authoritative answer,
-		// let's extract the RR contained in the authority section:
 		nextAuthorities := extractNS(res.Ns)
 
 		for authIndex := range nextAuthorities {
 			auth := nextAuthorities[authIndex]
+
+			isCom := strings.HasSuffix(auth.Ns, ".gtld-servers.net.")
+			skipThis := isCom && auth.Ns != defaultDotComNS
+			if useOnlyDefaultNSForDotCom && skipThis {
+				continue
+			}
+
 			style := "dashed"
-			//let's make it bold if the NS is gonna be used for the
-			// next query:
 			authorityNode := g.Node(auth.Ns)
 
 			g.Edge(
@@ -262,11 +346,11 @@ func goExplore(
 				Attr("style", style).
 				Attr("fontcolor", RcodeToColor[res.MsgHdr.Rcode])
 
-			id := fmt.Sprintf("%v:%v", auth.Ns, target)
+			pathID := fmt.Sprintf("%v:%v", auth.Ns, target)
 
-			if !AlreadyFollowed(id) {
-				MarkAsFollowed(id)
-				goExplore(g, authorityNode, auth.Ns, target, queryType)
+			if !AlreadyFollowed(pathID) {
+				MarkAsFollowed(pathID)
+				explore(g, authorityNode, auth.Ns, target, queryType)
 			}
 		}
 
@@ -438,7 +522,7 @@ func goExplore(
 			authority = rootNS
 			parentNode = CNAMEresultNode
 
-			goExplore(g, parentNode, authority, target, queryType)
+			explore(g, parentNode, authority, target, queryType)
 		}
 
 	}
