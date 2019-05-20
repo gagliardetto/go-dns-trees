@@ -77,19 +77,6 @@ func main() {
 		}
 	}
 
-	testTargets1 := []string{
-		"ticonsultores.biz.ni",
-		"adblock-data.brave.com",
-		"mail.google.com",
-		"example.com",
-		"ledger.brave.com",
-	}
-	testTargets2 := []string{
-		"io.",
-		"com.",
-	}
-	_ = testTargets1
-	_ = testTargets2
 	generateGraphsFor(targets...)
 
 	bellSound()
