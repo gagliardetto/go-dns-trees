@@ -76,6 +76,7 @@ var (
 )
 
 func main() {
+
 	targetFile := flag.String("f", "", "/path/to/domain/list.txt")
 	ptrOutputDir := flag.String("oF", defaultDir, "/path/to/output/folder")
 	goDeeper := flag.Bool("deeper", false, "also traverse the NS of the target as additional targets")
@@ -234,7 +235,7 @@ func generateGraphFor(target string) error {
 	}
 
 	debugf(
-		"finished %q (saved to %s)\n\n",
+		Lime("finished %q (saved to %s)\n\n"),
 		target,
 		path,
 	)
@@ -601,11 +602,49 @@ func Send(server string, domain string, t uint16) (*dns.Msg, error) {
 	// NOTE: does not work in Italy (via VPN); the result returns directly the A and CNAME records even if asking the root servers.
 	// NOTE: works in NL (via VPN).
 
-	r, _, err := dnsClient.Exchange(m, stripFinalDot(server)+":"+"53")
-	if err != nil {
-		return nil, fmt.Errorf("error while exchanging DNS message: %s", err)
+	var dnsReply *dns.Msg
+	errs := Retry(3, time.Second, func() error {
+		var err error
+		dnsReply, _, err = dnsClient.Exchange(m, stripFinalDot(server)+":"+"53")
+		return err
+	})
+	if errs != nil {
+		return nil, fmt.Errorf("errors while exchanging DNS message:\n%s", formatErrorArray("	    ", errs))
 	}
-	return r, nil
+	return dnsReply, nil
+}
+func formatErrorArray(prefix string, errs []error) string {
+	var res string
+	for i, err := range errs {
+		isLast := i == len(errs)-1
+
+		newline := "\n"
+		if isLast {
+			newline = ""
+		}
+		res += Sf(
+			"%s%v: %s%s",
+			prefix,
+			i+1,
+			err,
+			newline,
+		)
+	}
+	return res
+}
+
+// Retry executes task; if it returns an error, it will retry executing the task the specified number of times before giving up.
+func Retry(attempts int, sleep time.Duration, task func() error) []error {
+	var errs []error
+	for i := 1; i <= attempts; i++ {
+		err := task()
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, err)
+		time.Sleep(sleep)
+	}
+	return errs
 }
 
 func randomInt(min, max int) int {
