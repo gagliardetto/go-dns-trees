@@ -10,9 +10,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OWASP/Amass/amass"
+	amassutils "github.com/OWASP/Amass/amass/utils"
 
 	"github.com/emicklei/dot"
 	. "github.com/gagliardetto/utils"
@@ -28,10 +32,14 @@ var rootNS = getRandomRootDNS()
 
 const (
 	defaultDir = "generated"
+	// time format for the filename:
+	filenameTimeFormat = "Mon02Jan2006_15.04.05"
+	asnTimeFormat      = "Mon02Jan2006"
 )
 const (
 	colorRed   = "#FF1000"
 	colorGreen = "#00FF1F"
+	colorASN   = "#FF00DF"
 )
 
 var (
@@ -44,7 +52,8 @@ func main() {
 	flag.Parse()
 
 	// targets contains the list of target domains (sourced from the cli args and from list file)
-	targets := flag.Args()
+	var targets []string
+	targets = amassutils.UniqueAppend(targets, flag.Args()...)
 
 	{
 		// create output folder (if not exists):
@@ -59,7 +68,7 @@ func main() {
 		// add targets from file:
 		if targetFile != nil && *targetFile != "" {
 			err := ReadFileLinesAsString(*targetFile, func(target string) bool {
-				targets = append(targets, target)
+				targets = amassutils.UniqueAppend(targets, target)
 				return true
 			})
 			if err != nil {
@@ -137,13 +146,10 @@ func generateGraphFor(target string) error {
 		goExplore(gph, parentNode, authority, target, queryType)
 	}
 
-	// time format for the filename:
-	timeFormat := "Mon02Jan2006_15.04.05"
-
 	// save graphs in the "./generated" folder
 	dir := "generated"
 	// format filename and destination:
-	file := sanitizeFileNamePart(fmt.Sprintf("%s-%s.svg", target, time.Now().Format(timeFormat)))
+	file := sanitizeFileNamePart(fmt.Sprintf("%s-%s.svg", target, time.Now().Format(filenameTimeFormat)))
 	path := filepath.Join(dir, file)
 
 	debugf(
@@ -349,6 +355,54 @@ func goExplore(
 				RcodeToColor[res.MsgHdr.Rcode],
 			)
 
+			formatASN := func(asnInfo *amass.ASRecord) string {
+				return Sf(
+					"AS %s (%s)\nDESC: %s\nREGISTRY: %s\nALLOC: %s",
+					strconv.Itoa(asnInfo.ASN),
+					asnInfo.CC,
+					asnInfo.Description,
+					asnInfo.Registry,
+					asnInfo.AllocationDate.Format(asnTimeFormat),
+					//asnInfo.Netblocks,
+				)
+			}
+			asn, cidr, _, err := amass.IPRequest(v.A.String())
+			if err != nil {
+				debugf(Red("	  %q: error getting IP info: %v"), v.A.String(), err)
+			} else {
+
+				cidrNode := g.
+					Node(Sf("CIDR:%s", cidr.String())).
+					Attr("style", "filled").
+					Attr("fillcolor", colorASN)
+
+				rrEdge(g,
+					AresultNode,
+					cidrNode,
+					"",
+					"grey",
+					"white",
+				)
+
+				asnInfo, err := amass.ASNRequest(asn)
+				if err != nil {
+					debugf(Red("	  %q: error getting ASN info: %v"), v.A.String(), err)
+				} else {
+
+					ASNinfoNode := g.
+						Node(formatASN(asnInfo)).
+						Attr("style", "filled").
+						Attr("fillcolor", colorASN)
+
+					rrEdge(g,
+						cidrNode,
+						ASNinfoNode,
+						"",
+						"grey",
+						"white",
+					)
+				}
+			}
 		}
 		for _, v := range AAAArecords {
 			AAAAresultNode := g.
@@ -365,7 +419,6 @@ func goExplore(
 				colorAuthoritativeOrNot,
 				RcodeToColor[res.MsgHdr.Rcode],
 			)
-
 		}
 		for _, v := range CNAMErecords {
 			CNAMEresultNode := g.
