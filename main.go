@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,16 +33,14 @@ var (
 	rootNS = getRandomRootDNS()
 	// defaultDotComNS is the default NS used for the resolution of
 	// .com domains:
-	defaultDotComNS = "a.gtld-servers.net."
+	defaultDotComNS = getRandomDotComDNS()
 )
 
 const (
 	// defaultDir is the default directory name where the
 	// generated graphs will be saved to
-	defaultDir = "generated"
-	// time format for the filename:
-	filenameTimeFormat = "Mon02Jan2006_15.04.05"
-	asnTimeFormat      = "Mon02Jan2006"
+	defaultDir    = "generated"
+	asnTimeFormat = "Mon02Jan2006"
 )
 const (
 	colorRed       = "#FF1000"
@@ -212,10 +209,10 @@ func generateGraphFor(target string) error {
 	// file format
 	fileFormat := "svg"
 	// format filename and destination:
-	file := sanitizeFileNamePart(fmt.Sprintf(
+	file := SanitizeFileNamePart(fmt.Sprintf(
 		"%s-%s.%s",
 		target,
-		time.Now().Format(filenameTimeFormat),
+		time.Now().Format(FilenameTimeFormat),
 		fileFormat,
 	))
 	path := filepath.Join(dir, file)
@@ -241,14 +238,6 @@ func generateGraphFor(target string) error {
 		path,
 	)
 	return nil
-}
-
-var illegalFileNameCharacters = regexp.MustCompile(`[^[a-zA-Z0-9]-_]`)
-
-func sanitizeFileNamePart(part string) string {
-	part = strings.Replace(part, "/", "-", -1)
-	part = illegalFileNameCharacters.ReplaceAllString(part, "")
-	return part
 }
 
 var (
@@ -667,6 +656,23 @@ func getRandomRootDNS() string {
 	rootResolver := config.Servers[0]
 
 	rootDomain := "."
+
+	rootRes, err := Send(rootResolver, rootDomain, dns.TypeNS)
+	if err != nil {
+		panic(err)
+	}
+	rootServers := rootRes.Answer
+	return rootServers[randomInt(0, len(rootServers)-1)].(*dns.NS).Ns
+}
+func getRandomDotComDNS() string {
+	config, err := dns.ClientConfigFromFile("/etc/resolv.conf")
+	if err != nil {
+		panic(err)
+	}
+	_ = config
+	rootResolver := config.Servers[0]
+
+	rootDomain := "com."
 
 	rootRes, err := Send(rootResolver, rootDomain, dns.TypeNS)
 	if err != nil {
