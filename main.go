@@ -473,10 +473,15 @@ func explore(
 			}
 		}
 		for _, v := range AAAArecords {
+			fillcolor := colorGreen
+			if isSecondary {
+				fillcolor = colorSecondary
+			}
+
 			AAAAresultNode := g.
 				Node(rrFormatter("AAAA", v.AAAA)).
 				Attr("style", "filled").
-				Attr("fillcolor", colorGreen)
+				Attr("fillcolor", fillcolor)
 
 			debug("	  AAAA:", v.AAAA)
 
@@ -508,8 +513,13 @@ func explore(
 				panic(err)
 			}
 			if exists {
+				fillcolor := colorGreen
+				if isSecondary {
+					fillcolor = colorSecondary
+				}
+
 				CNAMEresultNode.
-					Attr("fillcolor", colorGreen)
+					Attr("fillcolor", fillcolor)
 			} else {
 				CNAMEresultNode.
 					Attr("fillcolor", colorRed)
