@@ -353,7 +353,7 @@ func explore(
 	if !res.Authoritative && noSuggestedNextAuthorities {
 		//debug("	 %sis not authoritative, but does not suggest who could be", authority)
 		// dead end:
-		addErrorNode(g, parentNode, "DEAD END", authority+"is not authoritative, but does not suggest who could be next")
+		addErrorNode(g, parentNode, "DEAD END", Sf("not authoritative for %s, but does not suggest who could be next", target))
 		//debug(spew.Sdump(res.Answer))
 		// TODO: show eventual A or AAAA or CNAME records (i.e. non-authoritative answers)
 		//return
