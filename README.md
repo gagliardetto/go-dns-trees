@@ -17,8 +17,8 @@ go build -o dns-trees
 
 #### Example successful
 
-![](images/successful.jpeg)
+![](images/successful.svg)
 
 #### Example with errors
 
-![](images/with_errors.jpeg)
+![](images/with_errors.svg)
