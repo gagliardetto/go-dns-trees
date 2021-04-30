@@ -4,21 +4,21 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/OWASP/Amass/amass"
-	amassutils "github.com/OWASP/Amass/amass/utils"
+	"github.com/ammario/ipisp"
+	"github.com/muesli/cache2go"
 
 	"github.com/emicklei/dot"
-	. "github.com/gagliardetto/utils"
+	. "github.com/gagliardetto/utilz"
 	"github.com/miekg/dns"
 	"gopkg.in/pipe.v2"
 )
@@ -91,7 +91,7 @@ func main() {
 
 	// targets contains the list of target domains (sourced from the cli args and from list file)
 	var targets []string
-	targets = amassutils.UniqueAppend(targets, flag.Args()...)
+	targets = UniqueAppend(targets, flag.Args()...)
 
 	{
 		// create output folder (if not exists):
@@ -106,7 +106,7 @@ func main() {
 		// add targets from file:
 		if targetFile != nil && *targetFile != "" {
 			err := ReadFileLinesAsString(*targetFile, func(target string) bool {
-				targets = amassutils.UniqueAppend(targets, target)
+				targets = UniqueAppend(targets, target)
 				return true
 			})
 			if err != nil {
@@ -238,6 +238,36 @@ func generateGraphFor(target string) error {
 		path,
 	)
 	return nil
+}
+
+var (
+	ASNInfoGetter    ipisp.Client
+	asnLookupIPCache *cache2go.CacheTable = cache2go.Cache("asnLookupIPCache")
+)
+
+func init() {
+	var err error
+	ASNInfoGetter, err = ipisp.NewDNSClient()
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
+}
+
+func ASNLookupIP(ip net.IP) (*ipisp.Response, error) {
+	cacheKey := ip.String()
+	{ // check cache:
+		// Let's retrieve the item from the cache.
+		cached, err := asnLookupIPCache.Value(cacheKey)
+		if err == nil {
+			return cached.Data().(*ipisp.Response), nil
+		}
+	}
+
+	res, err := ASNInfoGetter.LookupIP(ip)
+	if err == nil {
+		asnLookupIPCache.Add(cacheKey, time.Minute, res)
+	}
+	return res, err
 }
 
 var (
@@ -423,24 +453,24 @@ func explore(
 				RcodeToColor[res.MsgHdr.Rcode],
 			)
 
-			formatASN := func(asnInfo *amass.ASRecord) string {
+			formatASN := func(asnInfo *ipisp.Response) string {
 				return Sf(
-					"AS %s (%s)\nDESC: %s\nREGISTRY: %s\nALLOC: %s",
-					strconv.Itoa(asnInfo.ASN),
-					asnInfo.CC,
-					asnInfo.Description,
+					"%s (%s)\nNAME: %s\nREGISTRY: %s\nALLOC: %s",
+					asnInfo.ASN,
+					asnInfo.Country,
+					asnInfo.Name.Long,
 					asnInfo.Registry,
-					asnInfo.AllocationDate.Format(asnTimeFormat),
+					asnInfo.AllocatedAt.Format(asnTimeFormat),
 					//asnInfo.Netblocks,
 				)
 			}
-			asn, cidr, _, err := amass.IPRequest(v.A.String())
+			asn, err := ASNLookupIP(v.A)
 			if err != nil {
 				debugf(Red("	  %q: error getting IP info: %v"), v.A.String(), err)
 			} else {
 
 				cidrNode := g.
-					Node(Sf("CIDR:%s", cidr.String())).
+					Node(Sf("CIDR:%s", asn.Range)).
 					Attr("style", "filled").
 					Attr("fillcolor", colorASN)
 
@@ -452,24 +482,18 @@ func explore(
 					"white",
 				)
 
-				asnInfo, err := amass.ASNRequest(asn)
-				if err != nil {
-					debugf(Red("	  %q: error getting ASN info: %v"), v.A.String(), err)
-				} else {
+				ASNinfoNode := g.
+					Node(formatASN(asn)).
+					Attr("style", "filled").
+					Attr("fillcolor", colorASN)
 
-					ASNinfoNode := g.
-						Node(formatASN(asnInfo)).
-						Attr("style", "filled").
-						Attr("fillcolor", colorASN)
-
-					rrEdge(g,
-						cidrNode,
-						ASNinfoNode,
-						"",
-						"grey",
-						"white",
-					)
-				}
+				rrEdge(g,
+					cidrNode,
+					ASNinfoNode,
+					"",
+					"grey",
+					"white",
+				)
 			}
 		}
 		for _, v := range AAAArecords {
