@@ -14,3 +14,11 @@ See https://graphviz.org/download for more info.
 go build -o dns-trees
 ./dns-trees example.com
 ```
+
+#### Example successful
+
+![](images/successful.jpeg)
+
+#### Example with errors
+
+![](images/with_errors.jpeg)
