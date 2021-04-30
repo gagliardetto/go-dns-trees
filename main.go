@@ -23,10 +23,6 @@ import (
 	"gopkg.in/pipe.v2"
 )
 
-// cd $GOPATH/src/github.com/d1ss0lv3/trust-trees-go
-// go run main.go | dot -Tsvg  >| test.svg
-// go run main.go | dot -Tsvg  >| generated/$(date +"%a%d%b%Y_%H.%M.%S").svg
-
 var (
 	// rootNS is the default (choosen randomly at startup) root NS
 	// used all throughout the execution of this program:
