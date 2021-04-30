@@ -73,6 +73,7 @@ func main() {
 
 	targetFile := flag.String("f", "", "/path/to/domain/list.txt")
 	ptrOutputDir := flag.String("oF", defaultDir, "/path/to/output/folder")
+	ptrFileFormat := flag.String("format", "svg", "Output file format")
 	goDeeper := flag.Bool("deeper", false, "also traverse the NS of the target as additional targets")
 	ptrUseDefaultNsForCom := flag.Bool("one-com", true, "use only one default *.gtld-servers.net. NS (authoritative for com.) to avoid noise")
 	flag.Parse()
@@ -111,7 +112,17 @@ func main() {
 		}
 	}
 
-	generateGraphsFor(targets...)
+	// See https://graphviz.org/doc/info/output.html for complete list.
+	validFormats := []string{
+		"svg",
+		"jpeg",
+		"png",
+	}
+	isValidFormat := SliceContains(validFormats, *ptrFileFormat)
+	if !isValidFormat {
+		panic(Sf("file format is not valid: %s", *ptrFileFormat))
+	}
+	generateGraphsFor(*ptrFileFormat, targets...)
 
 	bellSound()
 }
@@ -120,16 +131,16 @@ func bellSound() {
 	fmt.Print("\007")
 }
 
-func generateGraphsFor(targets ...string) {
+func generateGraphsFor(fileFormat string, targets ...string) {
 	for _, target := range targets {
-		err := generateGraphFor(target)
+		err := generateGraphFor(fileFormat, target)
 		if err != nil {
 			panic(err)
 		}
 	}
 }
 
-func generateGraphFor(target string) error {
+func generateGraphFor(fileFormat, target string) error {
 	debugf(
 		"starting graphing %q...",
 		target,
@@ -202,8 +213,6 @@ func generateGraphFor(target string) error {
 	// save graphs in the "./generated" folder
 	dir := "generated"
 
-	// file format
-	fileFormat := "svg"
 	// format filename and destination:
 	file := SanitizeFileNamePart(fmt.Sprintf(
 		"%s-%s.%s",
