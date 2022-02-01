@@ -238,9 +238,12 @@ func generateGraphFor(fileFormat, target string) error {
 	}
 
 	debugf(
-		Lime("finished %q (saved to %s)\n\n"),
+		Lime("Finished %q"),
 		target,
-		path,
+	)
+	debugf(
+		"Saved graph to %s\n",
+		Bold(MustAbs(path)),
 	)
 	return nil
 }
